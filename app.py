@@ -1,9 +1,21 @@
+import os
+from pathlib import Path
+
 import joblib
 import pandas as pd
 from flask import Flask, jsonify, render_template, request
 
+# Stop early with a clear message if the pipeline hasn't been run yet
+for f, step in [("model.joblib", "python train_tuned.py"),
+                ("data/crimes_for_map.csv", "python prepare_data.py")]:
+    if not Path(f).exists():
+        raise SystemExit(f"Missing {f}. Run the pipeline first (see README), "
+                         f"starting with: {step}")
+
 app = Flask(__name__)
 model = joblib.load("model.joblib")
+
+
 
 FEATURES = ["hour", "dayofweek", "is_weekend", "latitude", "longitude"]
 DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday",
@@ -88,4 +100,4 @@ def api_crimes():
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5001)
+    app.run(debug=os.environ.get("FLASK_DEBUG") == "1", port=5001)

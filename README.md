@@ -6,6 +6,10 @@ Rebuilt from my undergraduate project report (St. Joseph's College of
 Engineering, 2023), this time with real public data, a proper train/validation/test
 split, and a baseline to compare against.
 
+![Map page](docs/map.png)
+![Map page 6Hour](docs/map6hr.png)
+![Predictor page](docs/predictor.png)
+
 ## What it does
 
 - **Hot-spot map** (`/map`): interactive heatmap with a color per crime type,

@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Chicago Crime Hot-Spot Map</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  html, body { height: 100%; margin: 0;
+               font-family: -apple-system, Helvetica, Arial, sans-serif; }
+  #wrap { display: flex; height: 100%; }
+  #side { width: 300px; padding: 14px; overflow-y: auto; box-sizing: border-box;
+          border-right: 1px solid #ddd; background: #fafafa; }
+  #map { flex: 1; }
+  .back { display: inline-block; padding: 8px 12px; background: #2b6cb0;
+          color: #fff; text-decoration: none; border-radius: 6px; font-size: 14px; }
+  h2 { font-size: 15px; margin: 18px 0 6px; }
+  select, button { width: 100%; padding: 7px; font-size: 14px;
+                   box-sizing: border-box; margin-top: 4px; }
+  .btnrow { display: flex; gap: 8px; }
+  .crime { display: flex; align-items: center; gap: 8px; margin: 5px 0;
+           font-size: 14px; cursor: pointer; }
+  .sw { width: 14px; height: 14px; border-radius: 3px; flex: none; }
+  .crime .n { margin-left: auto; color: #777; font-size: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  td { padding: 3px 0; }
+  td.num { text-align: right; }
+  .hint { color: #666; font-size: 12px; margin: 4px 0; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="side">
+    <a class="back" href="/">&larr; Back to predictor</a>
+
+    <h2>Time filter</h2>
+    <select id="daySel">
+      <option value="all">Every day</option>
+      <option value="weekday">Weekdays (Mon-Fri)</option>
+      <option value="weekend">Weekends (Sat-Sun)</option>
+      <option value="0">Monday</option>
+      <option value="1">Tuesday</option>
+      <option value="2">Wednesday</option>
+      <option value="3">Thursday</option>
+      <option value="4">Friday</option>
+      <option value="5">Saturday</option>
+      <option value="6">Sunday</option>
+    </select>
+    <div class="btnrow">
+      <select id="hourFrom"></select>
+      <select id="hourTo"></select>
+    </div>
+    <div class="hint">From hour, to hour (both included). 15 to 15 means
+      3:00-3:59 PM. For overnight, pick 22 to 3.</div>
+    <div class="hint" id="timeNote"></div>
+
+    <h2>Crime types</h2>
+    <div id="crimeList"><div class="hint">Loading crime data...</div></div>
+    <div class="btnrow">
+      <button id="allBtn">Show all</button>
+      <button id="noneBtn">Hide all</button>
+    </div>
+
+    <h2>Glow strength</h2>
+    <input type="range" id="glow" min="0.5" max="5" step="0.5" value="1"
+           style="width:100%">
+    <div class="hint">With fewer crimes selected the map gets dimmer. Slide
+      this up to brighten it.</div>
+
+    <h2>Zoom to an area</h2>
+    <select id="areaSel"><option value="">Choose a place...</option></select>
+    <div class="hint">Or just click anywhere on the map.</div>
+
+    <h2>Area radius</h2>
+    <select id="radiusSel">
+      <option value="0.5">0.5 km</option>
+      <option value="1" selected>1 km</option>
+      <option value="2">2 km</option>
+      <option value="3">3 km</option>
+    </select>
+    <button id="clearBtn">Clear selected area</button>
+
+    <div id="stats"></div>
+  </div>
+  <div id="map"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+{% raw %}
+<script>
+const COLORS = {
+  "THEFT": "#e41a1c", "BATTERY": "#1f78b4", "CRIMINAL DAMAGE": "#33a02c",
+  "ASSAULT": "#ff7f00", "MOTOR VEHICLE THEFT": "#6a3d9a", "BURGLARY": "#a65628",
+  "DECEPTIVE PRACTICE": "#e7298a", "OTHER OFFENSE": "#17becf", "ALL OTHERS": "#555555"
+};
+
+const PLACES = {
+  "The Loop": [41.8819, -87.6278], "Navy Pier": [41.8917, -87.6086],
+  "Lincoln Park": [41.9214, -87.6513], "Wrigleyville": [41.9484, -87.6553],
+  "Uptown": [41.9657, -87.6551], "Rogers Park": [42.0087, -87.6676],
+  "Logan Square": [41.9234, -87.7075], "West Garfield Park": [41.8810, -87.7300],
+  "Austin": [41.8900, -87.7600], "Pilsen": [41.8564, -87.6566],
+  "Hyde Park": [41.7943, -87.5907], "Englewood": [41.7794, -87.6446],
+  "Chatham": [41.7400, -87.6100], "Midway Airport": [41.7868, -87.7522],
+  "O'Hare Airport": [41.9742, -87.9073]
+};
+
+const map = L.map("map").setView([41.8781, -87.6298], 11);
+L.tileLayer(
+  "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
+  { attribution: "Tiles &copy; Esri", maxZoom: 18 }
+).addTo(map);
+
+let data = {};
+const layers = {};
+const counts = {};
+let glow = 1;
+let circle = null;
+let center = null;
+
+const areaSel = document.getElementById("areaSel");
+const radiusSel = document.getElementById("radiusSel");
+const statsBox = document.getElementById("stats");
+const daySel = document.getElementById("daySel");
+const hourFrom = document.getElementById("hourFrom");
+const hourTo = document.getElementById("hourTo");
+const timeNote = document.getElementById("timeNote");
+
+Object.keys(PLACES).forEach(function (name) {
+  const opt = document.createElement("option");
+  opt.value = name;
+  opt.textContent = name;
+  areaSel.appendChild(opt);
+});
+
+for (let h = 0; h < 24; h++) {
+  const label = (h < 10 ? "0" : "") + h + ":00";
+  hourFrom.add(new Option(label, h));
+  hourTo.add(new Option(label, h));
+}
+hourFrom.value = 0;
+hourTo.value = 23;
+
+// If we arrived from the predictor, start with its day and hour
+const q = new URLSearchParams(window.location.search);
+if (q.has("day")) {
+  const v = q.get("day");
+  if (Array.prototype.some.call(daySel.options, function (o) { return o.value === v; })) {
+    daySel.value = v;
+  }
+}
+if (q.has("hour")) {
+  const h = parseInt(q.get("hour"));
+  if (h >= 0 && h <= 23) { hourFrom.value = h; hourTo.value = h; }
+}
+
+function rgba(hex, a) {
+  const n = parseInt(hex.slice(1), 16);
+  return "rgba(" + (n >> 16) + "," + ((n >> 8) & 255) + "," + (n & 255) + "," + a + ")";
+}
+
+function prettyName(name) {
+  return name.charAt(0) + name.slice(1).toLowerCase();
+}
+
+// p = [latitude, longitude, hour, dayOfWeek]
+function passes(p) {
+  const d = daySel.value;
+  const dow = p[3];
+  if (d === "weekday" && dow > 4) { return false; }
+  if (d === "weekend" && dow < 5) { return false; }
+  if (d !== "all" && d !== "weekday" && d !== "weekend" && dow !== parseInt(d)) {
+    return false;
+  }
+  const from = parseInt(hourFrom.value);
+  const to = parseInt(hourTo.value);
+  if (from === 0 && to === 23) { return true; }   // full day: keep everything
+  const h = p[2];
+  if (h < 0) { return false; }                    // time unknown
+  return from <= to ? (h >= from && h <= to) : (h >= from || h <= to);
+}
+
+function pointsFor(name) {
+  const out = [];
+  const pts = data[name];
+  for (let i = 0; i < pts.length; i++) {
+    if (passes(pts[i])) { out.push([pts[i][0], pts[i][1]]); }
+  }
+  return out;
+}
+
+function refresh() {
+  if (!Object.keys(data).length) { return; }
+  let shown = 0;
+  let all = 0;
+  Object.keys(layers).forEach(function (name) {
+    const pts = pointsFor(name);
+    layers[name].setLatLngs(pts);
+    counts[name].textContent = pts.length.toLocaleString();
+    shown += pts.length;
+    all += data[name].length;
+  });
+  timeNote.textContent = "Showing " + shown.toLocaleString() + " of " +
+    all.toLocaleString() + " crimes. A custom hour range leaves out the " +
+    "crimes whose time wasn't recorded.";
+  showStats();
+}
+
+fetch("/api/crimes")
+  .then(function (r) { return r.json(); })
+  .then(function (d) { data = d; build(); });
+
+function build() {
+  const list = document.getElementById("crimeList");
+  list.innerHTML = "";
+  const names = Object.keys(data).sort(function (a, b) {
+    return data[b].length - data[a].length;
+  });
+
+  names.forEach(function (name) {
+    const color = COLORS[name] || "#666666";
+    layers[name] = L.heatLayer(pointsFor(name), {
+      radius: 8, blur: 12, max: 1 / glow,
+      gradient: { 0.3: rgba(color, 0.35), 0.65: rgba(color, 0.7), 1.0: color }
+    });
+
+    const row = document.createElement("label");
+    row.className = "crime";
+    row.innerHTML = '<input type="checkbox">' +
+      '<span class="sw" style="background:' + color + '"></span>' +
+      prettyName(name) + '<span class="n"></span>';
+    const box = row.querySelector("input");
+    box.dataset.name = name;
+    box.checked = (name === "THEFT");
+    box.addEventListener("change", function () { toggle(name, box.checked); });
+    counts[name] = row.querySelector(".n");
+    list.appendChild(row);
+
+    if (box.checked) { layers[name].addTo(map); }
+  });
+  refresh();
+}
+
+function toggle(name, on) {
+  if (on) { layers[name].addTo(map); } else { map.removeLayer(layers[name]); }
+}
+
+function setAll(on) {
+  document.querySelectorAll("#crimeList input").forEach(function (box) {
+    box.checked = on;
+    toggle(box.dataset.name, on);
+  });
+}
+document.getElementById("allBtn").addEventListener("click", function () { setAll(true); });
+document.getElementById("noneBtn").addEventListener("click", function () { setAll(false); });
+
+document.getElementById("glow").addEventListener("input", function (e) {
+  glow = parseFloat(e.target.value);
+  Object.values(layers).forEach(function (l) { l.setOptions({ max: 1 / glow }); });
+});
+
+daySel.addEventListener("change", refresh);
+hourFrom.addEventListener("change", refresh);
+hourTo.addEventListener("change", refresh);
+
+function showStats() {
+  if (!center) { return; }
+  if (circle) { map.removeLayer(circle); }
+  const km = parseFloat(radiusSel.value);
+  circle = L.circle(center, {
+    radius: km * 1000, color: "#222", weight: 2, fillOpacity: 0.05
+  }).addTo(map);
+
+  const kx = 111.32 * Math.cos(center[0] * Math.PI / 180);
+  const ky = 110.57;
+  const r2 = km * km;
+
+  let total = 0;
+  let everything = 0;
+  const rows = [];
+  Object.keys(data).forEach(function (name) {
+    let c = 0;
+    const pts = pointsFor(name);
+    everything += pts.length;
+    for (let i = 0; i < pts.length; i++) {
+      const dx = (pts[i][1] - center[1]) * kx;
+      const dy = (pts[i][0] - center[0]) * ky;
+      if (dx * dx + dy * dy <= r2) { c++; }
+    }
+    rows.push([name, c]);
+    total += c;
+  });
+  rows.sort(function (a, b) { return b[1] - a[1]; });
+
+  let html = "<h2>Inside the circle</h2><div><b>" + total.toLocaleString() +
+    " crimes</b> (" + (everything ? (100 * total / everything).toFixed(1) : 0) +
+    "% of the " + everything.toLocaleString() + " in the selected time)</div><table>";
+  rows.forEach(function (r) {
+    const pct = total ? (100 * r[1] / total).toFixed(0) : 0;
+    html += '<tr><td><span class="sw" style="background:' + (COLORS[r[0]] || "#666") +
+      ';display:inline-block;margin-right:6px;vertical-align:middle"></span>' +
+      prettyName(r[0]) + '</td><td class="num">' + r[1].toLocaleString() +
+      '</td><td class="num">' + pct + '%</td></tr>';
+  });
+  html += "</table>";
+  statsBox.innerHTML = html;
+}
+
+map.on("click", function (e) {
+  if (!Object.keys(data).length) { return; }
+  center = [e.latlng.lat, e.latlng.lng];
+  areaSel.value = "";
+  showStats();
+});
+
+areaSel.addEventListener("change", function () {
+  if (!areaSel.value || !Object.keys(data).length) { return; }
+  center = PLACES[areaSel.value];
+  showStats();
+  map.fitBounds(circle.getBounds());
+});
+
+radiusSel.addEventListener("change", showStats);
+
+document.getElementById("clearBtn").addEventListener("click", function () {
+  if (circle) { map.removeLayer(circle); }
+  circle = null;
+  center = null;
+  areaSel.value = "";
+  statsBox.innerHTML = "";
+});
+</script>
+{% endraw %}
+</body>
+</html>
